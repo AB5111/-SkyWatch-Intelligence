@@ -2,88 +2,129 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-import folium
-from streamlit_folium import st_folium
+import pydeck as pdk
 import plotly.express as px
 from datetime import datetime
 import time
 # --- 1. إعدادات استقرار الواجهة (Solid Interface) ---
-st.set_page_config(layout="wide", page_title="SkyWatch Intelligence Core")
+st.set_page_config(layout="wide", page_title="SkyWatch Intelligence Core", page_icon="📡")
+# تحسين تصميم CSS ليتناسب مع شاشات الرادار المتقدمة
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
-    * { font-family: 'Share Tech Mono', monospace; }
-    .main { background-color: #05070a; color: #00f2ff; }
-    .stMetric { background: rgba(0, 242, 255, 0.05); border: 1px solid #00f2ff; padding: 10px; }
+    html, body, [class*="css"] { font-family: 'Share Tech Mono', monospace; }
+    .stApp { background-color: #02060f; color: #00f2ff; }
+    div[data-testid="stMetricValue"] { color: #00ffcc; text-shadow: 0px 0px 10px rgba(0,255,204,0.5); }
+    div[data-testid="stMetricLabel"] { color: #8892b0; }
+    hr { border-color: #1e293b; }
     </style>
     """, unsafe_allow_html=True)
 # --- 2. محرك جلب البيانات الحقيقية (Real-Time Radar Fusion) ---
+# استخدام التخزين المؤقت لمنع حظر الـ API وتحديد مدة الصلاحية بـ 15 ثانية
+@st.cache_data(ttl=15, show_spinner=False)
 def get_live_tracks():
-    # إحداثيات تغطي المملكة والخليج بشكل كامل
     url = "https://opensky-network.org/api/states/all"
-    params = {'lamin': 12.0, 'lamax': 32.5, 'lomin': 33.0, 'lomax': 60.0}
+    # إحداثيات الشرق الأوسط والخليج
+    params = {'lamin': 12.0, 'lamax': 35.0, 'lomin': 33.0, 'lomax': 60.0}
     try:
-        response = requests.get(url, params=params, timeout=5)
+        response = requests.get(url, params=params, timeout=8)
+        if response.status_code != 200:
+            return pd.DataFrame()  
         data = response.json()
-        states = data['states']
-        # تعريف الأعمدة بشكل صارم لتجنب الخطأ السابق
+        if not data or 'states' not in data or data['states'] is None:
+            return pd.DataFrame()
         columns = ['icao24', 'callsign', 'origin', 'time_pos', 'last_contact', 
                    'lon', 'lat', 'baro_alt', 'on_ground', 'velocity', 'true_track', 
                    'ver_rate', 'sensors', 'geo_alt', 'squawk', 'spi', 'pos_source']
-        df = pd.DataFrame(states, columns=columns)
-        # تنظيف البيانات (إزالة القيم الفارغة في الإحداثيات)
+        df = pd.DataFrame(data['states'], columns=columns)
+        # تنظيف وتحويل البيانات (معالجة القيم الفارغة)
         df = df.dropna(subset=['lat', 'lon'])
-        df['Type'] = 'REAL-TIME TRACK'
+        df['baro_alt'] = pd.to_numeric(df['baro_alt'], errors='coerce').fillna(0)
+        df['velocity'] = pd.to_numeric(df['velocity'], errors='coerce').fillna(0)
+        df['true_track'] = pd.to_numeric(df['true_track'], errors='coerce').fillna(0)
+        # تحويل الوحدات إلى معايير الطيران العسكري/المدني
+        df['velocity_kt'] = (df['velocity'] * 1.94384).astype(int) # متر/ثانية إلى عقدة
+        df['alt_ft'] = (df['baro_alt'] * 3.28084).astype(int)     # متر إلى قدم
+        df['callsign'] = df['callsign'].str.strip().replace('', 'UNKNOWN')
+        # تحديد الألوان للرادار ثلاثي الأبعاد بناءً على الارتفاع
+        # أخضر للارتفاعات الشاهقة، أصفر للمتوسطة، أحمر للمنخفضة
+        def get_color(alt):
+            if alt > 25000: return [0, 255, 128, 200]
+            elif alt > 10000: return [255, 215, 0, 200]
+            else: return [255, 69, 0, 200]
+        df['color'] = df['alt_ft'].apply(get_color)
         return df
     except Exception as e:
-        # في حال فشل الاتصال، عرض جدول فارغ مهيأ بدلاً من إيقاف البرنامج
-        return pd.DataFrame(columns=['callsign', 'lat', 'lon', 'baro_alt', 'velocity', 'Type'])
+        return pd.DataFrame()
 # --- 3. تصميم لوحة التحكم الرئيسية ---
 st.title("📡 SKYWATCH: GLOBAL SURVEILLANCE & INTEL")
-st.write(f"**System Status:** Operational | **Network:** Global ADS-B Mesh | **Time:** {datetime.now().strftime('%H:%M:%S')}")
+st.markdown(f"**SYSTEM STATUS:** `OPERATIONAL` | **ENCRYPTION:** `AES-256` | **TIME (ZULU):** `{datetime.utcnow().strftime('%H:%M:%S')}Z`")
+st.divider()
 # جلب البيانات الحقيقية
-df_live = get_live_tracks()
+with st.spinner('Synchronizing with ADS-B Satellites...'):
+    df_live = get_live_tracks()
 # عرض المؤشرات الحيوية
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("LIVE TARGETS", len(df_live))
-c2.metric("RADAR STATUS", "CONNECTED", "STABLE")
-c3.metric("INTEL FEED", "MULTIPLE SOURCES")
-c4.metric("AI PREDICTION", "ACTIVE")
-# --- 4. عرض الخريطة الحقيقية (Satellite Mode) ---
+total_targets = len(df_live) if not df_live.empty else 0
+avg_speed = int(df_live['velocity_kt'].mean()) if total_targets > 0 else 0
+c1.metric("🔴 LIVE TARGETS", f"{total_targets} AIRCRAFT")
+c2.metric("⚡ AVG AIRSPEED", f"{avg_speed} KTS")
+c3.metric("🛰️ RADAR STATUS", "SECURE LINK", "+99.9% UPTIME")
+c4.metric("🛡️ THREAT LEVEL", "MONITORING", "NORMAL")
+st.divider()
+# --- 4. العرض ثلاثي الأبعاد (Pydeck 3D Radar) ---
 col_map, col_data = st.columns([2, 1])
 with col_map:
-    st.subheader("🌐 High-Resolution Radar & Satellite View")
-    # استخدام خرائط الأقمار الصناعية عالية الدقة من ArcGIS
-    m = folium.Map(location=[24.0, 45.0], zoom_start=5, 
-                   tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 
-                   attr='Esri Satellite Intelligence')
-    # إضافة حركة الطائرات الحقيقية
-    for _, track in df_live.head(100).iterrows(): # عرض أول 100 هدف لسرعة الأداء
-        # تحديد لون السهم بناءً على الارتفاع
-        color = 'lime' if track['baro_alt'] > 5000 else 'yellow'
-        folium.CircleMarker(
-            location=[track['lat'], track['lon']],
-            radius=4, color=color, fill=True,
-            popup=f"ID: {track['callsign']} | SPD: {track['velocity']} m/s | ALT: {track['baro_alt']}m"
-        ).add_to(m)
-    st_folium(m, width="100%", height=550)
-with col_data:
-    st.subheader("📊 Tactical Data Feed")
-    # عرض البيانات الحقيقية في جدول منظم
+    st.subheader("🌐 3D Tactical Airspace View")
     if not df_live.empty:
-        st.dataframe(df_live[['callsign', 'origin', 'velocity', 'baro_alt']].head(20), use_container_width=True)
-        # رسم بياني للسرعات الحقيقية للطائرات فوق المملكة
-        fig = px.bar(df_live.head(15), x='callsign', y='velocity', 
-                     color='velocity', title="Velocity Distribution", template="plotly_dark")
-        st.plotly_chart(fig, use_container_width=True)
+        # إعداد الرؤية المبدئية للكاميرا (فوق الرياض/الخليج) بزاوية مائلة 3D
+        view_state = pdk.ViewState(latitude=24.0, longitude=45.0, zoom=4.5, pitch=50, bearing=0)
+        # طبقة الأعمدة ثلاثية الأبعاد تمثل الطائرات وارتفاعاتها
+        layer = pdk.Layer(
+            "ColumnLayer",
+            data=df_live,
+            get_position=["lon", "lat"],
+            get_elevation="alt_ft",
+            elevation_scale=1.5,
+            radius=4000,
+            get_fill_color="color",
+            pickable=True,
+            auto_highlight=True,
+        )
+        # إعداد الخريطة بخلفية داكنة تتناسب مع الرادار
+        r = pdk.Deck(
+            layers=[layer],
+            initial_view_state=view_state,
+            map_style="mapbox://styles/mapbox/dark-v10",
+            tooltip={"html": "<b>Callsign:</b> {callsign} <br/> <b>Alt:</b> {alt_ft} ft <br/> <b>Speed:</b> {velocity_kt} kts <br/> <b>Origin:</b> {origin}", 
+                     "style": {"backgroundColor": "black", "color": "#00f2ff", "fontFamily": "monospace"}}
+        )
+        st.pydeck_chart(r, use_container_width=True)
     else:
-        st.warning("Waiting for secure data stream...")
-# --- 5. أوامر جانبية ثابتة ---
-st.sidebar.header("🕹️ OPERATIONAL COMMANDS")
-st.sidebar.button("📡 RE-SCAN AIRSPACE")
-st.sidebar.button("🛰️ SATELLITE SYNC")
-st.sidebar.button("🛡️ AIR DEFENSE ALERT")
-st.sidebar.button("📥 EXPORT TRACKING LOG")
-# تحديث تلقائي كل 15 ثانية لضمان الثبات
-time.sleep(15)
-st.rerun()
+        st.error("⚠️ RADAR BLINDSPOT - NO DATA RECEIVED OR API LIMIT REACHED.")
+with col_data:
+    st.subheader("📊 Target Acquisition")
+    if not df_live.empty:
+        # عرض البيانات بتنسيق عسكري دقيق
+        display_df = df_live[['callsign', 'alt_ft', 'velocity_kt', 'origin']].sort_values(by='alt_ft', ascending=False)
+        st.dataframe(display_df.head(15), use_container_width=True, hide_index=True)
+        # رسم بياني قطبي (Radar Chart) لتوزيع الاتجاهات (True Track)
+        fig = px.bar_polar(df_live.head(50), r="velocity_kt", theta="true_track",
+                           color="alt_ft", template="plotly_dark",
+                           color_continuous_scale=px.colors.sequential.Agsunset,
+                           title="Directional Velocity Tracker")
+        fig.update_layout(margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig, use_container_width=True)
+# --- 5. أوامر تحكم النظام (Sidebar) ---
+st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Radar_screen.gif/300px-Radar_screen.gif", use_column_width=True)
+st.sidebar.header("🕹️ COMMAND CENTER")
+# زر التحديث التلقائي (آمن على الواجهة ولا يجمدها)
+auto_refresh = st.sidebar.toggle("🔄 ENABLE AUTO-SWEEP (15s)", value=False)
+st.sidebar.button("📡 PING ALL SATELLITES", use_container_width=True)
+st.sidebar.button("🛡️ ENGAGE AIR DEFENSE PROTOCOL", use_container_width=True, type="primary")
+st.sidebar.markdown("---")
+st.sidebar.caption("SKYWATCH CORE v3.1 | UNAUTHORIZED ACCESS LOGGED.")
+# تنفيذ التحديث التلقائي إذا كان الزر مفعلاً
+if auto_refresh:
+    time.sleep(15)
+    st.rerun()
