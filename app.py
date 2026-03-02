@@ -4,88 +4,86 @@ import numpy as np
 import requests
 import folium
 from streamlit_folium import st_folium
-import plotly.graph_objects as go
-from folium.plugins import HeatMap
+import plotly.express as px
 from datetime import datetime
 import time
-# --- الإعدادات البصرية المتقدمة ---
-st.set_page_config(layout="wide", page_title="SKYWATCH | INTEL COMMAND", page_icon="📡")
+# --- 1. إعدادات استقرار الواجهة (Solid Interface) ---
+st.set_page_config(layout="wide", page_title="SkyWatch Intelligence Core")
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
-    * { font-family: 'Orbitron', sans-serif; }
-    .main { background-color: #020508; color: #00f2ff; }
-    .stMetric { background: rgba(0, 242, 255, 0.05); border: 1px solid #00f2ff; border-radius: 2px; }
-    .heat-legend { position: fixed; bottom: 50px; right: 50px; z-index: 1000; background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid red; }
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+    * { font-family: 'Share Tech Mono', monospace; }
+    .main { background-color: #05070a; color: #00f2ff; }
+    .stMetric { background: rgba(0, 242, 255, 0.05); border: 1px solid #00f2ff; padding: 10px; }
     </style>
     """, unsafe_allow_html=True)
-def get_enhanced_data():
-    # محاكاة وجلب بيانات الرادار مع سجل تاريخي للحرارة
+# --- 2. محرك جلب البيانات الحقيقية (Real-Time Radar Fusion) ---
+def get_live_tracks():
+    # إحداثيات تغطي المملكة والخليج بشكل كامل
+    url = "https://opensky-network.org/api/states/all"
+    params = {'lamin': 12.0, 'lamax': 32.5, 'lomin': 33.0, 'lomax': 60.0}
     try:
-        url = "https://opensky-network.org/api/states/all"
-        params = {'lamin': 15.0, 'lamax': 32.0, 'lomin': 35.0, 'lomax': 56.0}
-        res = requests.get(url, params=params, timeout=5).json()
-        raw = pd.DataFrame(res['states']).iloc[:, [1, 5, 6, 7, 9, 10]]
-        raw.columns = ['id', 'lon', 'lat', 'alt', 'vel', 'deg']
-        raw['Class'] = 'CIVILIAN'
-    except:
-        raw = pd.DataFrame(columns=['id', 'lon', 'lat', 'alt', 'vel', 'deg', 'Class'])
-    # أهداف تسلل تكتيكية متغيرة الموقع لمحاكاة التهديد
-    hostiles = pd.DataFrame({
-        'id': ['X-THREAT', 'GHOST-9'],
-        'lon': [46.7 + np.random.uniform(-2, 2), 50.1],
-        'lat': [24.7 + np.random.uniform(-2, 2), 26.3],
-        'alt': [100, 500], 'vel': [450, 110], 'deg': [90, 180],
-        'Class': 'HOSTILE'
-    })
-    return pd.concat([raw, hostiles], ignore_index=True).fillna(0)
-# --- واجهة القيادة والاستخبارات ---
-st.markdown("<h1 style='text-align: center; color: #ff0055; text-shadow: 0 0 20px #ff0055;'>S K Y W A T C H : I N T E L L I G E N C E</h1>", unsafe_allow_html=True)
-data = get_enhanced_data()
-# HUD Intelligence Metrics
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("HOTSPOT DENSITY", f"{np.random.randint(10, 85)}%", "HIGH")
-m2.metric("THREAT PREDICTION", "PROBABLE", "INTERCEPTOR READY")
-m3.metric("SIGNAL STRENGTH", "98dBm", "CLEAR")
-m4.metric("AI CORE TEMP", "42°C", "STABLE")
-# --- عرض الخريطة الحرارية وتنبؤ المسار ---
-col_main, col_side = st.columns([3, 1])
-with col_main:
-    st.subheader("🔥 Threat Heatmap & Trajectory Prediction")
-    # إنشاء خريطة مع طبقة حرارية (HeatMap) للأهداف المعادية والمزدحمة
-    m = folium.Map(location=[25.0, 45.0], zoom_start=6, tiles='CartoDB dark_matter')
-    # إضافة الخريطة الحرارية
-    heat_data = [[row['lat'], row['lon']] for _, row in data.iterrows()]
-    HeatMap(heat_data, radius=15, blur=10, gradient={0.4: 'blue', 0.65: 'lime', 1: 'red'}).add_to(m)
-    # رسم مسارات التنبؤ للأهداف المعادية
-    for _, obj in data[data['Class'] == 'HOSTILE'].iterrows():
-        # تنبؤ بسيط بناءً على الزاوية والسرعة
-        end_lat = obj['lat'] + (np.sin(np.radians(obj['deg'])) * 2)
-        end_lon = obj['lon'] + (np.cos(np.radians(obj['deg'])) * 2)
-        folium.PolyLine(
-            locations=[[obj['lat'], obj['lon']], [end_lat, end_lon]],
-            color='red', weight=2, dash_array='10',
-            tooltip="PREDICTED VECTOR"
+        response = requests.get(url, params=params, timeout=5)
+        data = response.json()
+        states = data['states']
+        # تعريف الأعمدة بشكل صارم لتجنب الخطأ السابق
+        columns = ['icao24', 'callsign', 'origin', 'time_pos', 'last_contact', 
+                   'lon', 'lat', 'baro_alt', 'on_ground', 'velocity', 'true_track', 
+                   'ver_rate', 'sensors', 'geo_alt', 'squawk', 'spi', 'pos_source']
+        df = pd.DataFrame(states, columns=columns)
+        # تنظيف البيانات (إزالة القيم الفارغة في الإحداثيات)
+        df = df.dropna(subset=['lat', 'lon'])
+        df['Type'] = 'REAL-TIME TRACK'
+        return df
+    except Exception as e:
+        # في حال فشل الاتصال، عرض جدول فارغ مهيأ بدلاً من إيقاف البرنامج
+        return pd.DataFrame(columns=['callsign', 'lat', 'lon', 'baro_alt', 'velocity', 'Type'])
+# --- 3. تصميم لوحة التحكم الرئيسية ---
+st.title("📡 SKYWATCH: GLOBAL SURVEILLANCE & INTEL")
+st.write(f"**System Status:** Operational | **Network:** Global ADS-B Mesh | **Time:** {datetime.now().strftime('%H:%M:%S')}")
+# جلب البيانات الحقيقية
+df_live = get_live_tracks()
+# عرض المؤشرات الحيوية
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("LIVE TARGETS", len(df_live))
+c2.metric("RADAR STATUS", "CONNECTED", "STABLE")
+c3.metric("INTEL FEED", "MULTIPLE SOURCES")
+c4.metric("AI PREDICTION", "ACTIVE")
+# --- 4. عرض الخريطة الحقيقية (Satellite Mode) ---
+col_map, col_data = st.columns([2, 1])
+with col_map:
+    st.subheader("🌐 High-Resolution Radar & Satellite View")
+    # استخدام خرائط الأقمار الصناعية عالية الدقة من ArcGIS
+    m = folium.Map(location=[24.0, 45.0], zoom_start=5, 
+                   tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 
+                   attr='Esri Satellite Intelligence')
+    # إضافة حركة الطائرات الحقيقية
+    for _, track in df_live.head(100).iterrows(): # عرض أول 100 هدف لسرعة الأداء
+        # تحديد لون السهم بناءً على الارتفاع
+        color = 'lime' if track['baro_alt'] > 5000 else 'yellow'
+        folium.CircleMarker(
+            location=[track['lat'], track['lon']],
+            radius=4, color=color, fill=True,
+            popup=f"ID: {track['callsign']} | SPD: {track['velocity']} m/s | ALT: {track['baro_alt']}m"
         ).add_to(m)
-        folium.Marker(
-            [obj['lat'], obj['lon']],
-            icon=folium.Icon(color='red', icon='warning', prefix='fa'),
-            popup=f"THREAT: {obj['id']}"
-        ).add_to(m)
-    st_folium(m, width="100%", height=600)
-with col_side:
-    st.subheader("🧠 AI Decision Support")
-    st.info("AI Analysis: High activity detected near Eastern Border. Intercept probability: 84%.")
-    # تحليل توزيع الارتفاعات
-    fig_alt = go.Figure(go.Histogram(x=data['alt'], marker_color='#ff0055', nbinsx=20))
-    fig_alt.update_layout(title="Altitude Distribution", paper_bgcolor="#020508", plot_bgcolor="#020508", font_color="#00f2ff", height=250)
-    st.plotly_chart(fig_alt, use_container_width=True)
-    st.write("📋 **Counter-Measures:**")
-    st.button("⚡ ACTIVATE JAMMING GRID", use_container_width=True)
-    st.button("📡 DEPLOY RECON DRONES", use_container_width=True)
-    st.button("🛑 EMERGENCY LOCKDOWN", use_container_width=True)
-# سجل التهديدات اللحظي
-st.subheader("📑 Tactical Intelligence Log")
-st.table(data[data['Class'] == 'HOSTILE'][['id', 'alt', 'vel', 'deg']])
-time.sleep(10)
+    st_folium(m, width="100%", height=550)
+with col_data:
+    st.subheader("📊 Tactical Data Feed")
+    # عرض البيانات الحقيقية في جدول منظم
+    if not df_live.empty:
+        st.dataframe(df_live[['callsign', 'origin', 'velocity', 'baro_alt']].head(20), use_container_width=True)
+        # رسم بياني للسرعات الحقيقية للطائرات فوق المملكة
+        fig = px.bar(df_live.head(15), x='callsign', y='velocity', 
+                     color='velocity', title="Velocity Distribution", template="plotly_dark")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("Waiting for secure data stream...")
+# --- 5. أوامر جانبية ثابتة ---
+st.sidebar.header("🕹️ OPERATIONAL COMMANDS")
+st.sidebar.button("📡 RE-SCAN AIRSPACE")
+st.sidebar.button("🛰️ SATELLITE SYNC")
+st.sidebar.button("🛡️ AIR DEFENSE ALERT")
+st.sidebar.button("📥 EXPORT TRACKING LOG")
+# تحديث تلقائي كل 15 ثانية لضمان الثبات
+time.sleep(15)
 st.rerun()
