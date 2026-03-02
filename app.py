@@ -7,111 +7,96 @@ from streamlit_folium import st_folium
 import plotly.graph_objects as go
 from datetime import datetime
 import time
-# --- إعدادات الواجهة الاحترافية (Dark Ops Theme) ---
-st.set_page_config(layout="wide", page_title="SKYWATCH | WAR ROOM", page_icon="🛡️")
+# --- 1. HUD & Military Theme Configuration ---
+st.set_page_config(layout="wide", page_title="SKYWATCH | JOC COMMAND", page_icon="🛡️")
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
     * { font-family: 'Share Tech Mono', monospace; }
-    .main { background-color: #05070a; }
-    .stMetric { background: rgba(16, 25, 40, 0.8); border: 1px solid #1a365d; border-radius: 4px; padding: 10px; box-shadow: 0 0 15px rgba(0, 255, 204, 0.1); }
-    .css-10trblm { color: #00ffcc !important; }
-    /* أنظمة التنبيه */
-    .red-alert { background-color: #ff0000; color: white; padding: 10px; animation: blinker 1.5s linear infinite; text-align: center; border-radius: 5px; font-weight: bold; }
-    @keyframes blinker { 50% { opacity: 0.3; } }
+    .main { background-color: #05070a; color: #00ffcc; }
+    .stMetric { background: rgba(16, 25, 40, 0.9); border-left: 4px solid #00ffcc; padding: 15px; border-radius: 5px; }
+    div[data-testid="stExpander"] { background: #0a111a; border: 1px solid #1a365d; }
+    .red-alert { background: #450a0a; color: #ff4b4b; padding: 15px; border: 2px solid #ff4b4b; text-align: center; 
+                 animation: pulse 2s infinite; font-weight: bold; font-size: 20px; }
+    @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
     </style>
     """, unsafe_allow_html=True)
-# --- محرك البيانات المدمج (Real + Tactical Simulation) ---
-def fetch_tactical_data():
-    # جلب بيانات ADS-B الحقيقية
+# --- 2. Intelligent Data Fusion (Fixed KeyErrors) ---
+def get_ops_data():
     try:
         url = "https://opensky-network.org/api/states/all"
-        params = {'lamin': 23.0, 'lamax': 29.0, 'lomin': 44.0, 'lomax': 52.0} # تغطية كامل الخليج
-        res = requests.get(url, params=params, timeout=3).json()
-        raw = pd.DataFrame(res['states'], columns=['id','callsign','origin','t1','t2','lon','lat','alt','g','vel','deg','v_rate','s','geo','sq','spi','src'])
-        df = raw[['id', 'callsign', 'lat', 'lon', 'alt', 'vel', 'deg']].dropna()
-        df['Class'] = 'Civilian'
+        # نطاق المملكة العربية السعودية والخليج
+        params = {'lamin': 15.0, 'lamax': 32.0, 'lomin': 35.0, 'lomax': 56.0}
+        res = requests.get(url, params=params, timeout=5).json()
+        raw = pd.DataFrame(res['states'])
+        # تأكد من وجود الأعمدة المطلوبة وتسميتها
+        df = raw.iloc[:, [1, 5, 6, 7, 9, 10]].copy()
+        df.columns = ['callsign', 'lon', 'lat', 'alt', 'vel', 'deg']
+        df['Class'] = 'CIVILIAN'
     except:
-        df = pd.DataFrame(columns=['id', 'callsign', 'lat', 'lon', 'alt', 'vel', 'deg', 'Class'])
-    # دمج أهداف "Unknown" ذات سلوك مشبوه (محاكاة رادار عسكري)
-    hostiles = pd.DataFrame({
-        'id': ['SIGINT-01', 'BOGEY-99'],
-        'callsign': ['DRONE_X', 'UNIDENTIFIED'],
-        'lat': [26.4 + np.random.uniform(-0.1, 0.1), 24.5],
-        'lon': [50.1 + np.random.uniform(-0.1, 0.1), 46.8],
-        'alt': [120, 3500], 'vel': [95, 820], 'deg': [180, 45], 'Class': 'Hostile/Stealth'
+        df = pd.DataFrame(columns=['callsign', 'lon', 'lat', 'alt', 'vel', 'deg', 'Class'])
+    # إضافة أهداف عسكرية محاكية (Tactical Overlay)
+    tactical_targets = pd.DataFrame({
+        'callsign': ['STLTH-01', 'BOGEY-X', 'UAV-INT'],
+        'lon': [46.7, 50.1, 48.5], 'lat': [24.7, 26.3, 25.5],
+        'alt': [150, 4500, 800], 'vel': [320, 950, 120], 'deg': [270, 45, 180],
+        'Class': 'HOSTILE/UNKNOWN'
     })
-    return pd.concat([df, hostiles], ignore_index=True)
-# --- واجهة القيادة العليا ---
-st.markdown("<h1 style='text-align: center; color: #00ffcc; letter-spacing: 5px;'>S K Y W A T C H : C O M M A N D</h1>", unsafe_allow_html=True)
-data = fetch_tactical_data()
-is_hostile_detected = any(data['Class'] == 'Hostile/Stealth')
-# نظام التنبيه العلوي
-if is_hostile_detected:
-    st.markdown("<div class='red-alert'>⚠️ THREAT DETECTED: UNIDENTIFIED TRACKS IN SOVEREIGN AIRSPACE</div>", unsafe_allow_html=True)
-# صف المؤشرات (HUD Metrics)
-m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("ACTIVE TRACKS", len(data), delta=len(data[data['Class']=='Hostile/Stealth']), delta_color="inverse")
-m2.metric("RADAR STATUS", "SCANNING", "OPTIMAL")
-m3.metric("INTERCEPTORS", "READY", "SQ-1")
-m4.metric("AI CONFIDENCE", "99.2%")
-m5.metric("SIGINT LOCK", "ACTIVE")
+    return pd.concat([df, tactical_targets], ignore_index=True).fillna(0)
+# --- 3. Dashboard HUD Header ---
+st.markdown("<h1 style='text-align: center; color: #00ffcc; text-shadow: 0 0 10px #00ffcc;'>S K Y W A T C H : JOINT OPERATIONS CENTER</h1>", unsafe_allow_html=True)
+data = get_ops_data()
+hostile_count = len(data[data['Class'] != 'CIVILIAN'])
+if hostile_count > 0:
+    st.markdown(f"<div class='red-alert'>⚠️ DEFCON 3: {hostile_count} UNIDENTIFIED TRACKS DETECTED</div>", unsafe_allow_html=True)
+# HUD Metrics
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("TOTAL TRACKS", len(data))
+c2.metric("THREAT LEVEL", "ELEVATED" if hostile_count > 0 else "LOW")
+c3.metric("RADAR SWEEP", "ACTIVE", "S-BAND")
+c4.metric("AI ANALYSIS", "STABLE", "96%")
+c5.metric("SIGINT LOCK", "ESTABLISHED")
 st.write("---")
-# --- تقسيم الشاشة (الخريطة + الرادار الدائري + التحكم) ---
-c1, c2, c3 = st.columns([2, 1, 1])
-with c1:
-    st.subheader("🌐 GEOSPATIAL INTELLIGENCE (GEOINT)")
-    # خريطة بنمط "Night Vision" عسكري
-    m = folium.Map(location=[26.0, 48.0], zoom_start=7, tiles='CartoDB dark_matter')
-    for _, obj in data.iterrows():
-        color = '#ff0000' if obj['Class'] == 'Hostile/Stealth' else '#00ffcc'
+# --- 4. Main Command Display ---
+col_map, col_radar, col_ops = st.columns([2, 1, 1])
+with col_map:
+    st.subheader("🛰️ GEOINT: Satellite Surveillance")
+    # خريطة قمر صناعي بنمط عسكري داكن
+    m = folium.Map(location=[25.0, 45.0], zoom_start=6, tiles='CartoDB dark_matter')
+    for _, r in data.iterrows():
+        color = '#ff4b4b' if r['Class'] != 'CIVILIAN' else '#00ffcc'
         folium.CircleMarker(
-            location=[obj['lat'], obj['lon']],
-            radius=6, color=color, fill=True, fill_opacity=0.8,
-            popup=f"TGT: {obj['callsign']}\nSPD: {obj['vel']}m/s\nALT: {obj['alt']}m"
+            location=[r['lat'], r['lon']], radius=6, color=color, fill=True,
+            popup=f"ID: {r['callsign']} | SPD: {r['vel']}m/s"
         ).add_to(m)
-    st_folium(m, width="100%", height=550)
-
-with c2:
-    st.subheader("📡 RADAR VECTOR SCAN")
-    # رسم رادار دائري احترافي باستخدام Plotly
+    st_folium(m, width="100%", height=500)
+with col_radar:
+    st.subheader("📡 Tactical Vector Scan")
+    # رادار دائري يظهر اتجاه وسرعة الأهداف
     fig_radar = go.Figure()
-    for _, obj in data.iterrows():
+    for _, r in data.iterrows():
         fig_radar.add_trace(go.Scatterpolar(
-            r=[obj['vel']], theta=[obj['deg']],
-            mode='markers+text', text=[obj['callsign']],
-            marker=dict(size=12, color='red' if obj['Class']=='Hostile/Stealth' else '#00ffcc', symbol='triangle-up'),
-            name=obj['callsign']
+            r=[r['vel']], theta=[r['deg']], mode='markers+text', text=[r['callsign']],
+            marker=dict(size=10, color='#ff4b4b' if r['Class'] != 'CIVILIAN' else '#00ffcc', symbol='triangle-up'),
+            name=r['callsign']
         ))
-    fig_radar.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 1000]), bgcolor="#05070a"),
-        showlegend=False, paper_bgcolor="#05070a", margin=dict(t=30, b=30, l=30, r=30)
-    )
+    fig_radar.update_layout(polar=dict(radialaxis=dict(visible=True), bgcolor="#05070a"),
+                            paper_bgcolor="#05070a", showlegend=False, margin=dict(t=20, b=20, l=20, r=20))
     st.plotly_chart(fig_radar, use_container_width=True)
-with c3:
-    st.subheader("🛠️ TACTICAL ACTIONS")
-    # أكثر من 20 أمر تفاعلي مصنفة
-    tab1, tab2 = st.tabs(["COMBAT", "SENSORS"])
-    with tab1:
-        st.button("🚀 SCRAMBLE F-15SA", key="btn1")
-        st.button("📡 ELECTRONIC JAMMING", key="btn2")
-        st.button("🔒 TARGET LOCK-ON", key="btn3")
-        st.button("☄️ KINETIC INTERCEPT", key="btn4")
-        st.button("☢️ EMP BURST", key="btn5")
-        st.button("🛑 AIRSPACE LOCKDOWN", key="btn6")
-        st.button("🛰️ SATELLITE DE-ORBIT", key="btn7")
-    with tab2:
-        st.button("🔍 SAR IMAGING", key="btn8")
-        st.button("🌡️ THERMAL SCAN", key="btn9")
-        st.button("📶 SIGINT DECODE", key="btn10")
-        st.button("🌑 STEALTH SCAN", key="btn11")
-        st.button("📡 PING IFF", key="btn12")
-        st.button("📊 EXPORT LOGS", key="btn13")
-# --- جدول تتبع الأهداف (Real-time Log) ---
-st.write("### 🗄️ TACTICAL TRACKING LOG")
-st.dataframe(data[['callsign', 'Class', 'alt', 'vel', 'deg', 'origin']].style.applymap(
-    lambda x: 'color: #ff4b4b; font-weight: bold' if x == 'Hostile/Stealth' else 'color: #00ffcc', subset=['Class']
-), use_container_width=True)
-# تحديث آلي لغرفة العمليات
-time.sleep(5)
+with col_ops:
+    st.subheader("🛠️ Tactical Command")
+    with st.container():
+        st.button("🚀 SCRAMBLE INTERCEPTORS", use_container_width=True)
+        st.button("📡 ELECTRONIC WARFARE (JAM)", use_container_width=True)
+        st.button("🔒 TARGET DESIGNATION", use_container_width=True)
+        st.button("🛡️ POINT DEFENSE ACTIVE", use_container_width=True)
+        st.button("📶 BATTLEFIELD SIGINT", use_container_width=True)
+        st.button("🌑 STEALTH COUNTERMEASURES", use_container_width=True)
+# --- 5. Tactical Log (Safe Rendering) ---
+st.subheader("📋 Operations Log")
+# عرض الأعمدة المتاحة فقط لتجنب KeyError
+display_cols = ['callsign', 'Class', 'alt', 'vel', 'deg']
+st.dataframe(data[display_cols].style.highlight_max(axis=0, color='#2d1a1a'), use_container_width=True)
+# Auto-refresh logic
+time.sleep(10)
 st.rerun()
